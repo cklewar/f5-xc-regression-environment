@@ -9,17 +9,22 @@ terraform {
     }
   }
 
-  volterra = {
+  required_providers {
+    volterra = {
       source  = "volterraedge/volterra"
-      version = ">= 0.11.16"
+      version = "= 0.11.16"
     }
 
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 4.33.0"
+      version = ">= 4.40.0"
     }
 
-  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = ">= 2.16.0"
+    }
+
     local = ">= 2.2.3"
     null  = ">= 3.1.1"
     http  = ">= 3.1.0"
