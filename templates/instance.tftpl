@@ -8,5 +8,5 @@ done
 
 sudo apt-get update
 sudo apt-get -y install --no-install-recommends git xz-utils curl net-tools tcpdump traceroute iputils-ping jq wget
-# sudo [ -d /tmp/custom_data/vcs ] || mkdir -p /tmp/custom_data/vcs
-# sudo ip route add ${PREFIX} via ${GATEWAY}
+sudo ip route del -net 0.0.0.0 via ${GATEWAY}
+sudo ip route add ${PREFIX} via ${GATEWAY}
