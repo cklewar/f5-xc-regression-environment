@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iperf-client
+  labels:
+    app: iperf-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iperf-client
+  template:
+    metadata:
+      labels:
+        app: iperf-client
+    spec:
+      containers:
+        - name: cloud-bandwidth-netperf
+          image: quay.io/networkstatic/cloud-bandwidth
+          env:
+            - name: CBANDWIDTH_PERF_SERVERS
+              value: "ipserf-server.default:site-a"
+            - name: CBANDWIDTH_PERF_SERVER_PORT
+              value: "5201"
+            - name: CBANDWIDTH_POLL_INTERVAL
+              value: "300"
+            - name: CBANDWIDTH_POLL_LENGTH
+              value: "5"
+            - name: CBANDWIDTH_DOWNLOAD_PREFIX
+              value: "bandwidth.download"
+            - name: CBANDWIDTH_UPLOAD_PREFIX
+              value: "bandwidth.upload"
+            - name: CBANDWIDTH_GRAFANA_ADDRESS
+              value: "grafana-carbon-receiver.default"
+            - name: CBANDWIDTH_GRAFANA_PORT
+              value: "2003"
+          securityContext:
+            allowPrivilegeEscalation: true
+            privileged: true
+          command: ["/bin/sh","-c"]
+          args:
+          - |
+            while true; do
+              ./cloud-bandwidth -perf-servers $CBANDWIDTH_PERF_SERVERS \
+                -perf-server-port $CBANDWIDTH_PERF_SERVER_PORT \
+                -test-interval $CBANDWIDTH_POLL_INTERVAL \
+                -test-length $CBANDWIDTH_POLL_LENGTH \
+                -tsdb-download-prefix $CBANDWIDTH_DOWNLOAD_PREFIX \
+                -tsdb-upload-prefix $CBANDWIDTH_UPLOAD_PREFIX \
+                -grafana-address $CBANDWIDTH_GRAFANA_ADDRESS \
+                -grafana-port $CBANDWIDTH_GRAFANA_PORT \
+                -nocontainer \
+                -debug;
+            done
+      terminationGracePeriodSeconds: 60

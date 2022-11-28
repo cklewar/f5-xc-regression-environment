@@ -1,0 +1,611 @@
+module "vpc" {
+  source             = "./modules/aws/vpc"
+  aws_region         = var.f5xc_aws_region
+  aws_az_name        = format("%s%s", var.f5xc_aws_region, var.aws_az_a)
+  aws_vpc_name       = local.site_name
+  aws_owner          = var.owner
+  aws_vpc_cidr_block = var.aws_vpc_cidr_block
+  custom_tags        = merge({ "ves-io-site-name" : local.site_name, "ves-io-creator-id" : var.owner }, local.custom_tags)
+  providers          = {
+    aws = aws.default
+  }
+}
+
+module "subnet" {
+  source          = "./modules/aws/subnet"
+  aws_vpc_id      = module.vpc.aws_vpc["id"]
+  aws_vpc_subnets = [
+    {
+      name                    = local.aws_subnet_outside_name
+      owner                   = var.owner
+      cidr_block              = var.aws_outside_subnet_cidr_block,
+      availability_zone       = format("%s%s", var.f5xc_aws_region, var.aws_az_a),
+      map_public_ip_on_launch = "true",
+      custom_tags             = local.custom_tags
+    },
+    {
+      name                    = local.aws_subnet_inside_name
+      owner                   = var.owner
+      cidr_block              = var.aws_inside_subnet_cidr_block,
+      availability_zone       = format("%s%s", var.f5xc_aws_region, var.aws_az_a),
+      map_public_ip_on_launch = "false",
+      custom_tags             = local.custom_tags
+    },
+    {
+      name                    = local.aws_subnet_workload_a_name
+      owner                   = var.owner
+      cidr_block              = var.aws_workload_a_subnet_cidr_block,
+      availability_zone       = format("%s%s", var.f5xc_aws_region, var.aws_az_a),
+      map_public_ip_on_launch = "true",
+      custom_tags             = merge(
+        {
+          "ves-io-site-name"                                  = local.site_name
+          "ves-io-creator-id"                                 = var.owner
+          "ves.io/subnet-type"                                = "workload"
+          "kubernetes.io/cluster/${var.aws_eks_cluster_name}" = "shared"
+          "kubernetes.io/role/elb"                            = 1
+        }, local.custom_tags)
+    },
+    {
+      name                    = local.aws_subnet_workload_b_name
+      owner                   = var.owner
+      cidr_block              = var.aws_workload_b_subnet_cidr_block,
+      availability_zone       = format("%s%s", var.f5xc_aws_region, var.aws_az_b),
+      map_public_ip_on_launch = "true",
+      custom_tags             = merge(
+        {
+          "kubernetes.io/cluster/${var.aws_eks_cluster_name}" = "shared",
+          "kubernetes.io/role/elb"                            = 1
+        }, local.custom_tags)
+    },
+    {
+      name                    = local.aws_subnet_mgmt_name
+      owner                   = var.owner
+      cidr_block              = var.aws_mgmt_subnet_cidr_block,
+      availability_zone       = format("%s%s", var.f5xc_aws_region, var.aws_az_a),
+      map_public_ip_on_launch = "true",
+      custom_tags             = local.custom_tags
+    }
+  ]
+  providers = {
+    aws = aws.default
+  }
+}
+
+resource "aws_route_table" "rt" {
+  provider = aws.default
+  vpc_id   = module.vpc.aws_vpc["id"]
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = module.site.f5xc_aws_vpc["igw_id"]
+  }
+  tags = merge({ "Owner" : var.owner }, local.custom_tags)
+}
+
+resource "aws_route_table_association" "subnet_mgmt" {
+  provider       = aws.default
+  subnet_id      = module.subnet.aws_subnets[local.aws_subnet_mgmt_name]["id"]
+  route_table_id = aws_route_table.rt.id
+}
+
+resource "aws_route_table_association" "subnet_workload_b" {
+  provider       = aws.default
+  subnet_id      = module.subnet.aws_subnets[local.aws_subnet_workload_b_name]["id"]
+  route_table_id = module.site.f5xc_aws_vpc["nodes"]["master-0"]["interfaces"]["sli"]["route_table_id"]
+}
+
+module "site" {
+  source                   = "./modules/f5xc/site/aws/vpc"
+  f5xc_api_token           = var.f5xc_api_token
+  f5xc_api_url             = var.f5xc_api_url
+  f5xc_tenant              = var.f5xc_tenant
+  f5xc_aws_cred            = var.f5xc_aws_cred
+  f5xc_namespace           = var.f5xc_namespace
+  f5xc_aws_region          = var.f5xc_aws_region
+  f5xc_aws_ce_gw_type      = "multi_nic"
+  f5xc_aws_vpc_owner       = var.owner
+  f5xc_aws_vpc_site_name   = local.site_name
+  f5xc_aws_vpc_existing_id = module.vpc.aws_vpc["id"]
+  f5xc_aws_vpc_az_nodes    = {
+    node0 : {
+      f5xc_aws_vpc_outside_existing_subnet_id  = contains(keys(module.subnet.aws_subnets), local.aws_subnet_outside_name) ? module.subnet.aws_subnets[local.aws_subnet_outside_name]["id"] : ""
+      f5xc_aws_vpc_inside_existing_subnet_id   = contains(keys(module.subnet.aws_subnets), local.aws_subnet_inside_name) ? module.subnet.aws_subnets[local.aws_subnet_inside_name]["id"] : ""
+      f5xc_aws_vpc_workload_existing_subnet_id = contains(keys(module.subnet.aws_subnets), local.aws_subnet_workload_a_name) ? module.subnet.aws_subnets[local.aws_subnet_workload_a_name]["id"] : ""
+      f5xc_aws_vpc_az_name                     = format("%s%s", var.f5xc_aws_region, var.aws_az_a)
+    }
+  }
+  f5xc_aws_vpc_no_worker_nodes         = true
+  f5xc_aws_default_ce_os_version       = true
+  f5xc_aws_default_ce_sw_version       = true
+  f5xc_aws_vpc_use_http_https_port     = true
+  f5xc_aws_vpc_inside_static_routes    = [var.aws_workload_a_subnet_cidr_block]
+  f5xc_aws_vpc_use_http_https_port_sli = true
+  ssh_public_key                       = var.ssh_public_key_file
+  custom_tags                          = local.custom_tags
+  providers                            = {
+    volterra = volterra.default
+    aws      = aws.default
+  }
+}
+
+module "eks" {
+  source                  = "./modules/aws/eks"
+  owner                   = var.owner
+  aws_region              = var.f5xc_aws_region
+  aws_az_name             = format("%s%s", var.f5xc_aws_region, var.aws_az_a)
+  aws_eks_cluster_name    = format("%s-%s-%s", var.project_prefix, var.aws_eks_cluster_name, var.project_suffix)
+  aws_existing_subnet_ids = [module.site.f5xc_aws_vpc["workload_subnet_ids"][0], module.subnet.aws_subnets[local.aws_subnet_workload_b_name]["id"]]
+  providers               = {
+    aws = aws.default
+  }
+}
+
+resource "aws_security_group_rule" "eks" {
+  type              = "ingress"
+  from_port         = 0
+  to_port           = 65535
+  protocol          = "all"
+  cidr_blocks       = [var.aws_workload_a_subnet_cidr_block, var.aws_inside_subnet_cidr_block]
+  security_group_id = module.eks.aws_eks["vpc_config"][0]["cluster_security_group_id"]
+  provider          = aws.default
+}
+
+resource "local_file" "kubeconfig" {
+  content  = module.eks.aws_eks["kubeconfig"]
+  filename = format("%s/kube/kubeconfig", path.module)
+}
+
+module "aws_security_group_private" {
+  source                     = "./modules/aws/security_group"
+  aws_security_group_name    = format("%s-private-sg", local.site_name)
+  aws_vpc_id                 = module.vpc.aws_vpc["id"]
+  security_group_rule_egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = -1
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  security_group_rule_ingress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["10.0.0.0/8"]
+    },
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["172.16.0.0/16"]
+    },
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["192.168.0.0/16"]
+    }
+  ]
+  providers = {
+    aws = aws.default
+  }
+}
+
+module "aws_security_group_public" {
+  source                     = "./modules/aws/security_group"
+  aws_security_group_name    = format("%s-public-sg", local.site_name)
+  aws_vpc_id                 = module.vpc.aws_vpc["id"]
+  security_group_rule_egress = [
+    {
+      from_port   = 0
+      to_port     = 0
+      protocol    = -1
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  security_group_rule_ingress = [
+    {
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  providers = {
+    aws = aws.default
+  }
+}
+
+module "ec2_01" {
+  depends_on              = [module.site.f5xc_aws_vpc]
+  source                  = "./modules/aws/ec2"
+  owner                   = var.owner
+  aws_ec2_instance_name   = format("%s-%s-%s", var.project_prefix, var.aws_ec2_instance_name, var.project_suffix)
+  aws_ec2_instance_type   = "t2.small"
+  aws_ec2_instance_script = {
+    actions = [
+      format("chmod +x /tmp/%s", var.aws_ec2_instance_script_file_name),
+      format("sudo /tmp/%s", var.aws_ec2_instance_script_file_name)
+    ]
+    template_data = {
+      PREFIX  = var.aws_workload_a_subnet_cidr_block
+      GATEWAY = cidrhost(module.subnet.aws_subnets[local.aws_subnet_workload_a_name]["cidr_block"], 1)
+    }
+  }
+  aws_ec2_instance_script_template = var.aws_ec2_instance_script_template_file_name
+  aws_ec2_instance_script_file     = var.aws_ec2_instance_script_file_name
+  aws_az_name                      = format("%s%s", var.f5xc_aws_region, var.aws_az_a)
+  aws_region                       = var.f5xc_aws_region
+  ssh_private_key_file             = file(var.ssh_private_key_file)
+  ssh_public_key_file              = file(var.ssh_public_key_file)
+  template_output_dir_path         = local.template_output_dir_path
+  template_input_dir_path          = local.template_input_dir_path
+  aws_ec2_network_interfaces       = [
+    {
+      create_eip      = true
+      private_ips     = ["172.16.189.10"]
+      security_groups = [module.aws_security_group_public.aws_security_group["id"]]
+      subnet_id       = module.subnet.aws_subnets[local.aws_subnet_mgmt_name]["id"]
+      custom_tags     = merge({ "Owner" : var.owner }, local.custom_tags)
+    },
+    {
+      create_eip      = false
+      private_ips     = ["172.16.187.10"]
+      security_groups = [module.aws_security_group_private.aws_security_group["id"]]
+      subnet_id       = module.subnet.aws_subnets[local.aws_subnet_workload_a_name]["id"]
+      custom_tags     = merge({ "Owner" : var.owner }, local.custom_tags)
+    }
+  ]
+  aws_ec2_instance_custom_data_dirs = [
+    {
+      name        = "instance_script"
+      source      = "${local.template_output_dir_path}/${var.aws_ec2_instance_script_file_name}"
+      destination = format("/tmp/%s", var.aws_ec2_instance_script_file_name)
+    }
+  ]
+  custom_tags = local.custom_tags
+  providers   = {
+    aws = aws.default
+  }
+}
+
+module "site_a_regression" {
+  depends_on                = [module.eks.aws_eks]
+  source                    = "./modules/f5xc/site/aws/vpc"
+  f5xc_api_url              = var.f5xc_api_url
+  f5xc_api_token            = var.f5xc_api_token
+  f5xc_namespace            = var.f5xc_namespace
+  f5xc_tenant               = var.f5xc_tenant
+  f5xc_aws_region           = var.f5xc_aws_region
+  f5xc_aws_cred             = var.f5xc_aws_cred
+  f5xc_aws_vpc_owner        = var.owner
+  f5xc_aws_vpc_site_name    = format("%s-regression-site-a-%s", var.project_prefix, var.project_suffix)
+  f5xc_aws_vpc_primary_ipv4 = "192.168.168.0/21"
+  f5xc_aws_ce_gw_type       = "single_nic"
+  f5xc_aws_vpc_az_nodes     = {
+    node0 = { f5xc_aws_vpc_local_subnet = "192.168.168.0/26", f5xc_aws_vpc_az_name = format("%s%s", var.f5xc_aws_region, var.aws_az_a) }
+  }
+  f5xc_aws_default_ce_os_version       = true
+  f5xc_aws_default_ce_sw_version       = true
+  f5xc_aws_vpc_no_worker_nodes         = true
+  f5xc_aws_vpc_use_http_https_port     = true
+  f5xc_aws_vpc_use_http_https_port_sli = true
+  f5xc_labels                          = { "aws-env" = "shared" }
+  ssh_public_key                       = file(var.ssh_public_key_file)
+  custom_tags                          = local.custom_tags
+  providers                            = {
+    aws      = aws.default
+    volterra = volterra.default
+  }
+}
+
+module "f5xc_virtual_site" {
+  depends_on                            = [module.site_a_regression.f5xc_aws_vpc]
+  source                                = "./modules/f5xc/site/virtual"
+  f5xc_virtual_site_name                = format("%s-regression-%s", var.project_prefix, var.project_suffix)
+  f5xc_virtual_site_type                = "CUSTOMER_EDGE"
+  f5xc_virtual_site_selector_expression = ["regression_env in (regression_site)"]
+  providers                             = {
+    volterra = volterra.default
+  }
+}
+
+module "vk8s" {
+  source                    = "./modules/f5xc/v8ks"
+  f5xc_tenant               = var.f5xc_tenant
+  f5xc_api_url              = var.f5xc_api_url
+  f5xc_api_token            = var.f5xc_api_token
+  f5xc_vk8s_name            = format("%s-regression-%s", var.project_prefix, var.project_suffix)
+  f5xc_namespace            = var.f5xc_namespace
+  f5xc_create_k8s_creds     = true
+  f5xc_virtual_site_refs    = [module.f5xc_virtual_site.virtual-site["name"]]
+  f5xc_vsite_refs_namespace = var.f5xc_vsite_refs_namespace
+  f5xc_k8s_credentials_name = format("%s-regression-%s", var.project_prefix, var.project_suffix)
+  providers                 = {
+    volterra = volterra.default
+  }
+}
+
+module "healthcheck" {
+  source                               = "./modules/f5xc/healthcheck"
+  f5xc_tenant                          = var.f5xc_tenant
+  f5xc_namespace                       = var.f5xc_namespace
+  f5xc_healthcheck_name                = format("%s-hc", local.site_name)
+  f5xc_healthcheck_path                = "/"
+  f5xc_healthcheck_timeout             = 1
+  f5xc_healthcheck_interval            = 15
+  f5xc_healthcheck_healthy_threshold   = 1
+  f5xc_healthcheck_unhealthy_threshold = 2
+  providers                            = {
+    volterra = volterra.default
+  }
+}
+
+resource "volterra_origin_pool" "grafana_op" {
+  name                   = format("%s-grafana-op", local.site_name)
+  namespace              = var.f5xc_regression_env_namespace
+  endpoint_selection     = "DISTRIBUTED"
+  loadbalancer_algorithm = "LB_OVERRIDE"
+  port                   = 31887
+  no_tls                 = true
+
+  origin_servers {
+    private_ip {
+      ip             = "172.16.187.212"
+      inside_network = true
+      site_locator {
+        site {
+          namespace = var.f5xc_namespace
+          name      = local.site_name
+          tenant    = var.f5xc_tenant
+        }
+      }
+    }
+  }
+  healthcheck {
+    name = module.healthcheck.healthcheck["name"]
+  }
+  provider = volterra.default
+}
+
+resource "volterra_http_loadbalancer" "grafana" {
+  name                            = format("%s-grafana-lb", local.site_name)
+  domains                         = var.f5xc_http_lb_domains
+  namespace                       = var.f5xc_regression_env_namespace
+  disable_waf                     = true
+  no_challenge                    = true
+  disable_rate_limit              = true
+  disable_api_definition          = true
+  service_policies_from_namespace = true
+  advertise_on_public_default_vip = true
+
+  default_route_pools {
+    pool {
+      tenant    = var.f5xc_tenant
+      namespace = var.f5xc_regression_env_namespace
+      name      = volterra_origin_pool.grafana_op.name
+    }
+    weight   = 1
+    priority = 1
+  }
+
+  https_auto_cert {
+    port          = "443"
+    http_redirect = true
+    add_hsts      = false
+    tls_config {
+      default_security = true
+    }
+  }
+  provider = volterra.default
+}
+
+data "volterra_http_loadbalancer_state" "grafana" {
+  name      = format("%s-grafana-lb", local.site_name)
+  namespace = var.f5xc_regression_env_namespace
+  provider  = volterra.default
+}
+
+resource "volterra_origin_pool" "iperf" {
+  name                   = format("%s-iperf-op", local.site_name)
+  namespace              = var.f5xc_regression_env_namespace
+  endpoint_selection     = "DISTRIBUTED"
+  loadbalancer_algorithm = "LB_OVERRIDE"
+  port                   = 31069
+  no_tls                 = true
+
+  origin_servers {
+    private_ip {
+      ip             = "172.16.187.212"
+      inside_network = true
+      site_locator {
+        site {
+          namespace = var.f5xc_namespace
+          name      = local.site_name
+          tenant    = var.f5xc_tenant
+        }
+      }
+    }
+  }
+  provider = volterra.default
+}
+
+resource "volterra_tcp_loadbalancer" "iperf_server" {
+  name                           = format("%s-iperf-lb", local.site_name)
+  namespace                      = var.f5xc_regression_env_namespace
+  domains                        = ["ipserf-server.default"]
+  retract_cluster                = true
+  hash_policy_choice_round_robin = true
+  tcp                            = true
+  no_sni                         = true
+
+  origin_pools_weights {
+    pool {
+      tenant    = var.f5xc_tenant
+      namespace = var.f5xc_regression_env_namespace
+      name      = volterra_origin_pool.iperf.name
+    }
+    weight   = 1
+    priority = 1
+  }
+
+  advertise_custom {
+    advertise_where {
+      site {
+        network = "SITE_NETWORK_INSIDE"
+        site {
+          name      = local.site_name
+          namespace = var.f5xc_namespace
+          tenant    = var.f5xc_tenant
+        }
+      }
+      port = 5201
+    }
+  }
+  provider = volterra.default
+}
+
+resource "volterra_origin_pool" "grafana_carbon_receiver" {
+  name                   = format("%s-grafana-carbon-receiver", local.site_name)
+  namespace              = var.f5xc_regression_env_namespace
+  endpoint_selection     = "DISTRIBUTED"
+  loadbalancer_algorithm = "LB_OVERRIDE"
+  port                   = 2003
+  no_tls                 = true
+
+  origin_servers {
+    private_ip {
+      ip             = "172.16.187.212"
+      inside_network = true
+      site_locator {
+        site {
+          namespace = var.f5xc_namespace
+          name      = local.site_name
+          tenant    = var.f5xc_tenant
+        }
+      }
+    }
+  }
+  provider = volterra.default
+}
+
+resource "volterra_tcp_loadbalancer" "grafana_carbon_receiver" {
+  name                           = format("%s-grafana-carbon-receiver-lb", local.site_name)
+  namespace                      = var.f5xc_regression_env_namespace
+  domains                        = ["grafana-carbon-receiver.default"]
+  retract_cluster                = true
+  hash_policy_choice_round_robin = true
+  tcp                            = true
+  no_sni                         = true
+
+  origin_pools_weights {
+    pool {
+      tenant    = var.f5xc_tenant
+      namespace = var.f5xc_regression_env_namespace
+      name      = volterra_origin_pool.grafana_carbon_receiver.name
+    }
+    weight   = 1
+    priority = 1
+  }
+
+  advertise_custom {
+    advertise_where {
+      site {
+        network = "SITE_NETWORK_INSIDE"
+        site {
+          name      = local.site_name
+          namespace = var.f5xc_namespace
+          tenant    = var.f5xc_tenant
+        }
+      }
+      port = 2003
+    }
+  }
+  provider = volterra.default
+}
+
+resource "volterra_origin_pool" "grafana_carbon_pickle" {
+  name                   = format("%s-grafana-carbon-pickle", local.site_name)
+  namespace              = var.f5xc_regression_env_namespace
+  endpoint_selection     = "DISTRIBUTED"
+  loadbalancer_algorithm = "LB_OVERRIDE"
+  port                   = 2004
+  no_tls                 = true
+
+  origin_servers {
+    private_ip {
+      ip             = "172.16.187.212"
+      inside_network = true
+      site_locator {
+        site {
+          namespace = var.f5xc_namespace
+          name      = local.site_name
+          tenant    = var.f5xc_tenant
+        }
+      }
+    }
+  }
+  provider = volterra.default
+}
+
+resource "volterra_tcp_loadbalancer" "grafana_carbon_pickle" {
+  name                           = format("%s-grafana-carbon-pickle", local.site_name)
+  namespace                      = var.f5xc_regression_env_namespace
+  domains                        = ["grafana-carbon-pickle.default"]
+  retract_cluster                = true
+  hash_policy_choice_round_robin = true
+  tcp                            = true
+  no_sni                         = true
+
+  origin_pools_weights {
+    pool {
+      tenant    = var.f5xc_tenant
+      namespace = var.f5xc_regression_env_namespace
+      name      = volterra_origin_pool.grafana_carbon_pickle.name
+    }
+    weight   = 1
+    priority = 1
+  }
+
+  advertise_custom {
+    advertise_where {
+      site {
+        network = "SITE_NETWORK_INSIDE"
+        site {
+          name      = local.site_name
+          namespace = var.f5xc_namespace
+          tenant    = var.f5xc_tenant
+        }
+      }
+      port = 2004
+    }
+  }
+  provider = volterra.default
+}
+
+
+resource "local_file" "vkubeconfig" {
+  filename = "./kube/vkubeconfig"
+  content  = module.vk8s.vk8s["k8s_conf"]
+}
+
+
+output "f5xc_aws_regression_environment" {
+  value = {
+    backend = {
+      site = module.site.f5xc_aws_vpc
+      eks  = module.eks.aws_eks
+    }
+    regression = {
+      ec2             = module.ec2_01
+      site_a          = module.site_a_regression.f5xc_aws_vpc
+      vk8s_kubeconfig = module.vk8s.vk8s["k8s_conf"]
+    }
+    grafana = {
+      url             = format("https://%s", volterra_http_loadbalancer.grafana.domains[0])
+      lb_state        = data.volterra_http_loadbalancer_state.grafana.state
+      auto_cert_state = data.volterra_http_loadbalancer_state.grafana.auto_cert_state
+    }
+  }
+}

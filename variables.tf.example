@@ -1,0 +1,161 @@
+variable "project_prefix" {
+  type        = string
+  description = "prefix string put in front of string"
+  default     = "f5xc"
+}
+
+variable "project_suffix" {
+  type        = string
+  description = "prefix string put at the end of string"
+  default     = "01"
+}
+
+variable "f5xc_api_url" {
+  type    = string
+}
+
+variable "f5xc_api_p12_file" {
+  type = string
+}
+
+variable "f5xc_api_token" {
+  type    = string
+}
+
+variable "f5xc_aws_cred" {
+  type    = string
+  default = "ck-aws-01"
+}
+
+variable "f5xc_tenant" {
+  type    = string
+}
+
+variable "f5xc_namespace" {
+  type    = string
+  default = "system"
+}
+
+variable "f5xc_regression_env_namespace" {
+  type    = string
+  default = "default"
+}
+
+variable "f5xc_aws_region" {
+  type    = string
+  default = "us-east-2"
+}
+
+variable "aws_az_a" {
+  type    = string
+  default = "a"
+}
+
+variable "aws_az_b" {
+  type    = string
+  default = "b"
+}
+
+variable "f5xc_vsite_refs_namespace" {
+  type    = string
+  default = "shared"
+}
+
+variable "f5xc_http_lb_domains" {
+  type    = list(string)
+  default = ["grafana.adn.helloclouds.app"]
+}
+
+variable "owner" {
+  type    = string
+  default = "c.klewar@f5.com"
+}
+
+variable "ssh_public_key_file" {
+  type    = string
+}
+
+variable "ssh_private_key_file" {
+  type = string
+}
+
+variable "aws_eks_cluster_name" {
+  type    = string
+  default = "aws-eks-cluster"
+}
+
+variable "aws_vpc_cidr_block" {
+  type    = string
+  default = "172.16.184.0/21"
+}
+
+variable "aws_outside_subnet_cidr_block" {
+  type    = string
+  default = "172.16.185.0/24"
+}
+
+variable "aws_inside_subnet_cidr_block" {
+  type    = string
+  default = "172.16.186.0/24"
+}
+
+variable "aws_workload_a_subnet_cidr_block" {
+  type    = string
+  default = "172.16.187.0/24"
+}
+
+variable "aws_workload_b_subnet_cidr_block" {
+  type    = string
+  default = "172.16.188.0/24"
+}
+
+variable "aws_mgmt_subnet_cidr_block" {
+  type    = string
+  default = "172.16.189.0/24"
+}
+
+variable "rendered_template_output_path" {
+  type    = string
+  default = "_out/"
+}
+
+variable "aws_ec2_instance_name" {
+  type    = string
+  default = "ec2-instance"
+}
+
+variable "aws_ec2_instance_script_file_name" {
+  type    = string
+  default = "instance.sh"
+}
+
+variable "aws_ec2_instance_script_template_file_name" {
+  type    = string
+  default = "instance.tftpl"
+}
+
+provider "volterra" {
+  api_p12_file = var.f5xc_api_p12_file
+  url          = var.f5xc_api_url
+  alias        = "default"
+}
+
+provider "aws" {
+  region = var.f5xc_aws_region
+  alias  = "default"
+}
+
+locals {
+  site_name                  = format("%s-regression-env-%s", var.project_prefix, var.project_suffix)
+  template_output_dir_path   = abspath("_out/")
+  template_input_dir_path    = abspath("templates/")
+  aws_subnet_outside_name    = format("%s-sn-outside", local.site_name)
+  aws_subnet_inside_name     = format("%s-sn-inside", local.site_name)
+  aws_subnet_workload_a_name = format("%s-sn-workload-a", local.site_name)
+  aws_subnet_workload_b_name = format("%s-sn-workload-b", local.site_name)
+  aws_subnet_mgmt_name       = format("%s-sn-mgmt", local.site_name)
+  custom_tags                = {
+    f5xc-tenant  = var.f5xc_tenant
+    f5xc-feature = "f5xc-aws-regression-env"
+  }
+}
