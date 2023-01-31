@@ -12,7 +12,7 @@ terraform {
   required_providers {
     volterra = {
       source  = "volterraedge/volterra"
-      version = "= 0.11.16"
+      version = "= 0.11.18"
     }
 
     aws = {
@@ -22,7 +22,7 @@ terraform {
 
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = ">= 2.16.0"
+      version = ">= 2.17.0"
     }
 
     local = ">= 2.2.3"
